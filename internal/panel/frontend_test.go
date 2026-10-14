@@ -742,6 +742,9 @@ const ctx = {
   Date, Number, String, Math, Map, Array, Object, isNaN, URLSearchParams, Set,
   document: { getElementById: id => (id === 'cfgForm' ? cfgForm : null) },
   $: id => (id === 'cfgForm' ? cfgForm : null),
+  // KEDIT 定义在切片区域之外（白名单密钥编辑器，见 app.js 末尾）。
+  // 本用例只钉 CFG_MAP 的空串语义，故给最小桩：collect() 返回空数组即可。
+  KEDIT: { collect: () => [], load: () => {}, render: () => {} },
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.collectConfig = collectConfig;', ctx);
@@ -1004,5 +1007,28 @@ process.stdout.write(JSON.stringify({
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("chart tooltip structure=%s\nwant %s（groups 应等于数据点数，loose 应为 0）",
 			strings.TrimSpace(string(out)), want)
+	}
+}
+func TestKeyModelListShowsCanonicalID(t *testing.T) {
+	path, err := filepath.Abs("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := string(src)
+
+	// 列表项 <span> 必须输出 esc(id)，不能是 esc(mid(m))。
+	if strings.Contains(code, "esc(mid(m))") {
+		t.Errorf("app.js 仍以 esc(mid(m)) 渲染列表项，应改为 esc(id)（带前缀，与勾选值一致）")
+	}
+	if !strings.Contains(code, "esc(id)") {
+		t.Errorf("app.js 未发现 esc(id) 渲染，模型列表可能仍显示裸名")
+	}
+	// 搜索也必须基于归一化 id，否则搜 "global:" 搜不到。
+	if strings.Contains(code, "mid(m).toLowerCase().includes") {
+		t.Errorf("app.js 搜索仍基于 mid(m)，应改为 idOf(m)（含前缀），否则搜 global:/cn: 匹配不到")
 	}
 }

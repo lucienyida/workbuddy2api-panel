@@ -47,7 +47,38 @@ body {
   background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
 }
+.keylist { display: flex; flex-direction: column; gap: 12px; }
+.keycard {
+  border: 1px solid var(--line-soft); border-radius: 10px;
+  padding: 12px; background: var(--surface-2);
+}
+.keycard .krow { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.keycard .krow input[type=text] { flex: 1 1 160px; min-width: 0; }
+.keycard .kname { flex: 0 1 150px; }
+.keycard .klabel { font-size: 12px; opacity: .7; margin: 8px 0 4px; }
+.ktabs { display: flex; gap: 6px; margin-bottom: 6px; }
+.ktabs button {
+  flex: 0 0 auto; font-size: 12px; padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line-soft); background: transparent; color: inherit;
+}
+.ktabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.ksearch { width: 100%; margin-bottom: 6px; }
+.kmodels {
+  max-height: 190px; overflow-y: auto;
+  border: 1px solid var(--line-soft); border-radius: 8px; padding: 6px 8px;
+}
+.kmodels label { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; }
+.kmodels label input { flex: 0 0 auto; }
+.kmodels .kempty { font-size: 12px; opacity: .6; padding: 8px 2px; }
+.kaddrow { display: flex; gap: 6px; margin-top: 6px; }
+.kaddrow input[type=text] { flex: 1 1 auto; min-width: 0; font-size: 13px; }
+.kaddrow button { flex: 0 0 auto; }
+.kmanual { font-style: normal; font-size: 10px; opacity: .6; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.kwarn { margin: 6px 0; padding: 6px 10px; font-size: 12px; border-radius: 6px; background: rgba(220,53,69,.12); border: 1px solid rgba(220,53,69,.45); color: #e66; }
+.kbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
 .brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--line-soft); }
+
 .brand .name { font-weight: 650; letter-spacing: -.01em; font-size: 15px; }
 .brand .sub { color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); margin-top: 3px; }
 .nav ul { list-style: none; padding: 10px 8px; flex: 1; }
@@ -1077,6 +1108,22 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               关闭则归档与面板都不再出现来源信息。改动即时生效，无需重启。</div>
             <div class="hint" style="margin-top:8px">归档开关、保留天数与容量上限（<code>logging.request_archive_*</code>）需手工编辑配置文件。</div>
           </div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <div class="chd">
+            <span class="lb">白名单密钥</span>
+            <button type="button" id="btnKeyAdd" class="mini primary">+ 添加密钥</button>
+            <button type="button" id="btnKeyLoadAll" class="mini" title="汇总所有账号的模型（不去重，按国内/国际分组）">⚡ 加载所有账号模型</button>
+          </div>
+          <div class="hint" style="margin-bottom:10px">
+            受限密钥只能访问下方勾选的模型；<b>未勾选任何模型时该密钥不可用（一律 403）</b>。
+            模型列表取自账号池当前可用模型，<b>国内</b>与<b>国际（global）</b>分开选择。
+            名单不准时可点「⚡ 加载所有账号模型」汇总全部账号（<b>不去重</b>），
+            或在任意一组底部<b>手动添加模型名</b>。上方"网关密钥"为主密钥，不受白名单限制。
+          </div>
+          <div id="keyList" class="keylist"></div>
+          <div id="keyEmpty" class="hint" style="padding:14px 0;text-align:center">尚未添加白名单密钥</div>
         </div>
 
         <div class="savebar">

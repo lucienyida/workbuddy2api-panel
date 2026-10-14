@@ -317,6 +317,13 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 // 各域独立探测、独立容错：某域无可用账号则整域跳过；两域全空时才报错
 // （有错误明细回 502，一个账号都没有回 503）。
 func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
+	// all=1：汇总**全部账号**的模型目录，按 realm（cn/global）分组、**不去重**
+	// （同名模型在多账号间重复出现属预期，前端按账号来源区分展示）。
+	// 用于面板「一键加载所有账号模型」——解决分 realm 取单个账号时目录缺失的问题。
+	if v := r.URL.Query().Get("all"); v == "1" || v == "true" {
+		p.modelsAll(w)
+		return
+	}
 	out := make([]map[string]any, 0)
 	var fetchErrs []string
 
@@ -362,6 +369,62 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+}
+
+// modelsAll 汇总**全部账号**的模型目录（不去重），按 realm 分组返回。
+// 来源: qiaoba223/workbuddy2api-panel（models?all=1），原样移植。
+// 与 models() 的差异：不做"取一个可用账号"的抽样，而是遍历池中每个账号各查一次，
+// 因此同一模型会在多个账号下重复出现——这是刻意行为，前端按账号来源展示。
+func (p *Panel) modelsAll(w http.ResponseWriter) {
+	type acctModels struct {
+		uid      string
+		nickname string
+		realm    string
+		ids      []string
+	}
+	var (
+		groups []acctModels
+		cnIDs  []string
+		glIDs  []string
+		errs   []string
+	)
+	for _, st := range p.cfg.Pool.List() {
+		acct := p.cfg.Pool.AuthByUID(st.UID)
+		if acct == nil {
+			continue
+		}
+		realm := acct.Realm()
+		if realm != "global" {
+			realm = "cn"
+		}
+		infos, err := p.cfg.Upstream.FetchModels(acct)
+		if err != nil {
+			errs = append(errs, st.UID+": "+err.Error())
+			continue
+		}
+		g := acctModels{uid: st.UID, nickname: st.Nickname, realm: realm}
+		for _, mi := range infos {
+			// 统一带 realm 前缀，与白名单 allow 的键形态（cn:/global:）一致。
+			id := realm + ":" + mi.ID
+			g.ids = append(g.ids, id)
+			if realm == "global" {
+				glIDs = append(glIDs, id)
+			} else {
+				cnIDs = append(cnIDs, id)
+			}
+		}
+		groups = append(groups, g)
+	}
+	out := map[string]any{
+		"ok":     true,
+		"cn":     cnIDs,
+		"global": glIDs,
+		"groups": groups,
+	}
+	if len(errs) > 0 {
+		out["errors"] = errs
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），
