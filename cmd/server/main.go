@@ -572,6 +572,10 @@ func restartRequiredFields(c *Config) []string {
 		out = append(out, "upstash")
 	}
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
+	// web_auth 在装配期一次性构造（main.go 的 webauth.New 建 Auth 实例，
+	// 用户库与 TTL 被捕获），之后不再重读——不在 livecfg 热快照里，无法热改。
+	// 面板改完若只提示"已保存"，用户会以为登录开关/用户库立即生效，实则要重启。
+	out = append(out, "web_auth.enabled", "web_auth.users_file", "web_auth.session_ttl", "web_auth.cookie_secure")
 	out = append(out, "logging.request_archive_enabled", "logging.request_retention_days", "logging.request_archive_max_mb")
 	out = append(out, "server.read_timeout")
 	return out
