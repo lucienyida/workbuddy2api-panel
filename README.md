@@ -188,6 +188,36 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 > 上游仓库此后已删除，上述第二轮（`ea8b1e5`）即其**删库前的最后一次更新**，本分支已完整吸收。此后本仓库与上游不再有同步关系，演进以本仓库为准。
 
+### 来自平行分支 qiaoba223/workbuddy2api-panel 的移植
+
+上游删库后，社区 Fork 出现若干彼此独立演进的分支。`qiaoba223/workbuddy2api-panel` 与我们
+**同源**（基点同为上游 `76bb543`，2026-09-16 快照），但走出了一条不同的路线：它停留在旧面板
+UI 上做增量，我们则重写了面板。因此两者是**平行分支**而非上下游关系——它多数 commit 是我们
+早已以更好方式实现的同一件事。
+
+下列内容为本分支此前**确实没有**、且经评估值得吸收的部分。移植原则：qiaoba 侧代码**原样保留**
+（含前端模板、样式、交互），仅在与本仓库架构必然冲突处做最小适配，并在下方逐条标注。
+
+| 移植内容 | 来源 | 说明 |
+|---|---|---|
+| **白名单密钥** | `2213d78` | 多受限 Key + 模型白名单。主密钥全模型放行；受限密钥仅能调用白名单内模型，`/v1/models` 也只返回白名单内容，越权请求 403 `model_not_allowed`。面板新增「白名单密钥」卡片管理。配置见 `keys[]` |
+| **面板账密登录 web_auth** | 上游继承 | `api_key` 之外的「人用」凭证。开启后面板只认登录会话，`api_key` 退化为仅服务 `/v1/*`，两套凭证彻底隔离；含 CSRF、PBKDF2 用户库、`setpassword` 子命令 |
+| **`update.sh` 一键更新** | `5aa102e`+`901c908` | 拉取 → 重建 → 滚动重启 → 健康检查，带 GitHub 加速代理回退与失败回滚，见「部署运维」 |
+| 面板通用弹窗 | `4226447`/`780131b` | 仅吸收不改变现有交互的通用组件；滑动/焦点类修复因我们已有独立实现而**未吸收** |
+
+**适配说明（全部为最小必要改动，可逐条核对）：**
+
+- `web_auth`：qiaoba 直接改写 `withAuth` 函数体；我们改为**新增** `withAuthOrWeb` 包装器
+  （`internal/panel/panel_webauth.go`），本仓库原有 `withAuth` 逐字节未动，`web_auth` 关闭时
+  直接透传。37 个路由注册点由 `p.withAuth(` 机械替换为 `p.withAuthOrWeb(`
+- 前端：`app.js` 中 qiaoba 的 `KEDIT` 模块（301 行）与 `index.html` 的白名单卡片、`.key*` 样式
+  **原样插入**，未改名、未调整布局、未改交互；仅新增两处挂载调用（加载/收集）
+- `config.go` / `main.go`：新增 `web_auth` 与 `keys[]` 配置段并接装配线，本仓库既有字段未改
+- `web_auth` 加入 `restart_required`：qiaoba 侧此处缺失（改了不生效且无提示），本分支**已修**
+
+未移植：qiaoba 的伪密码框登录修复（`780131b`，与本仓库 `20bde29` 的独立实现互斥）、
+开学季活动横滑（`3f69302`，该活动已被本仓库整块下线）、其停留的旧面板 UI 与布局。
+
 ## 架构总览
 
 ```mermaid
@@ -400,6 +430,87 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `session_sticky.enabled` | `true` | 会话粘性路由开关 |
 | `session_sticky.ttl` | `30m` | 会话绑定 TTL（滚动续期） |
 | `session_sticky.gc_interval` | `5m` | 过期绑定 GC 周期 |
+| `keys[]` | `[]` | **白名单密钥**：受限 API Key 列表。每项 `key`（必填）/`name`（备注名，面板展示用，不参与鉴权）/`allow`（模型白名单）。主密钥全模型放行；受限密钥仅限白名单内模型，越权 403 `model_not_allowed`，`/v1/models` 也只列白名单内模型。**`allow` 留空 = 不允许任何模型**（fail-closed，见下节「`allow` 留空会拒绝一切」）。密钥**必须互不重复**且不等于主密钥（重复会导致鉴权结果不确定，启动即报错）。面板有对应卡片可视化管理 |
+| `web_auth.enabled` | `false` | **面板账密登录**开关。`true` = 面板只认登录会话，`api_key` 仅服务 `/v1/*`（两套凭证彻底隔离）；`false` = 现状（`api_key` 同时管面板）。改此项**需重启进程**才生效 |
+| `web_auth.users_file` | `./data/web_users.json` | 用户库路径（用户名 → PBKDF2 哈希）。独立于 `config.json` 存放，避免密码哈希随配置外泄。用 `setpassword` 子命令增改用户。⚠️ 相对路径的解析基准在两个组件里**并不相同**（见本节末尾「路径陷阱」），最稳妥的写法是填**绝对路径** |
+| `web_auth.session_ttl` | `12h` | 登录会话有效期（Go duration 字符串） |
+
+### 白名单密钥（受限 API Key）
+
+给「只允许调用某几个模型」的调用方单独发一把 Key，主密钥仍全模型可用。
+
+```json
+{
+  "api_key": "sk-main-全模型密钥",
+  "keys": [
+    { "key": "sk-friend-a", "name": "给 A 的", "allow": ["cn:claude-sonnet-4-5"] },
+    { "key": "sk-lite",     "name": "只读小模型", "allow": ["cn:gpt-5-mini", "global:gpt-5-mini"] }
+  ]
+}
+```
+
+行为要点：
+
+- **模型名写法**与面板/日志一致，带 `realm` 前缀（`cn:` / `global:`），缺前缀按默认 realm 解析
+- `/v1/models` 对受限密钥**只返回白名单内的模型**，调用方看不到其他模型
+- 请求白名单外的模型 → `403`，错误码 `model_not_allowed`
+- 主密钥（`api_key`）不受任何限制；`keys[]` 中的密钥彼此独立、可单独吊销
+- `name` 仅作备注/面板展示，**不参与任何鉴权判断**，可随意改
+
+**`allow` 留空会拒绝一切**：受限密钥必须显式写出要放行的模型，`"allow": []`（或漏写 / 只填空白）等于
+**一个模型都不许调** —— `/v1/models` 返回空列表，任何请求 `403 model_not_allowed`。
+这是**刻意 fail-closed**：避免「忘了勾选 = 全开」把受限密钥变成事实上的主密钥，
+所以「先建 Key、过几天再补白名单」这条路走不通，建 Key 时就该把白名单填好。
+
+> 实测（`allow: []`，请求 `cn:claude-sonnet-4-5`）：
+> `403 {"code":"model_not_allowed","message":"API key \"<备注名>\" 无权访问模型 \"cn:claude-sonnet-4-5\"（白名单：）"}`
+> 同一模型用主密钥请求则正常进入上游（本仓库实例无可用账号池时回 `503 no_healthy_account`，与鉴权无关）。
+
+配置错误会**启动即报错**而非静默降级：密钥为空、与主密钥重复、或多把受限密钥重复，都会拒绝启动。
+
+### 面板账密登录（web_auth）【可选】
+
+默认关闭。开启后，面板改走账号密码登录，`api_key` 退化为**只服务 `/v1/*`** —— 适合把面板暴露在公网、又不想让 `api_key` 泄漏即失守的场景。
+
+**首次设置：**
+
+```bash
+# 1) 建一个用户（密码交互式输入，不回显、不进 shell 历史）
+docker exec -it workbuddy2api /app/wb2api setpassword alice
+
+# 2) 打开 web_auth：编辑 config.json
+#    "web_auth": { "enabled": true }
+
+# 3) 重启进程（此项不热重载）
+docker compose restart wb2api
+```
+
+用户管理：
+
+```bash
+setpassword alice                    # 新增，或重置已有用户的密码（交互式输入）
+setpassword alice --password 'xxx'   # 非交互（密码会进 shell 历史，仅限受控环境）
+setpassword --list                   # 列出用户名（不含哈希）
+setpassword --delete alice           # 删除用户
+```
+
+> 目标用户库路径取自 `-config` 指向的 `config.json` 中的 `web_auth.users_file`。
+> 容器内二进制名以镜像为准（`/app/wb2api` 或 `/app/workbuddy2api`），可用 `docker ps` 确认。
+
+安全细节：密码以 **PBKDF2** 哈希落盘到独立文件（默认 `./data/web_users.json`，权限 0600），不写进 `config.json`；登录会话走 HttpOnly Cookie，写操作额外校验 CSRF Token。
+
+> `setpassword` 的路径解析顺序：`web_auth.users_file` 若为**相对路径，按 `config.json` 所在目录**解析
+> （缺省则等价于 `config.json` 同级的 `data/web_users.json`）。
+> 注意 `-config` 是**全局 flag，必须写在子命令之前**：`wb -config /app/config.json setpassword alice`。
+
+> **⚠️ 路径陷阱（建议直接用绝对路径）**：相对 `users_file` 在**服务器进程**里是按**进程工作目录**解析的，
+> 与 `setpassword` 的「config 目录」基准**不是同一套规则**。于是当配置以相对路径给出、且工作目录
+> ≠ config 目录时，两边会落到**不同**的用户库文件上 —— 表现为「`setpassword` 说创建成功，登录却提示
+> 用户名或密码错误」「面板登录页显示还没有用户」。
+> Docker Compose 部署天然不踩（工作目录 `/app`，config 也在 `/app/config.json`，两者一致）；
+> 裸跑二进制或自行调整工作目录时请把 `users_file` 写成**绝对路径**，或让工作目录与 config 目录保持一致。
+
+> ⚠️ 开启前**务必先建好至少一个用户**——「已启用但无任何用户」会导致面板无法登录，只能改回配置或进容器建号。
 
 ### 上游超时语义（三段各归其位）
 
@@ -786,10 +897,39 @@ http://127.0.0.1:7863/panel/
 | `./login.sh` | OAuth 登录 → 落盘 auth → 重启容器 |
 | `./signin.sh [auths_dir]` | 批量签到（过期先刷新） |
 | `./credit.sh` / `./credit.sh -json` | 积分日报（美化 / 原始 JSON） |
+| `./update.sh` | **一键更新**：拉取 → 重建 → 滚动重启 → 健康检查（见下节） |
 | `python3 scripts/probe_active.py` | 活跃上报手动诊断 / 补跑（probe=只读 / report=单号上报 / unlock=单号领猫 / ALL=全池；写操作默认 dry-run，需 `--yes`） |
 | `python3 scripts/probe_max_tokens.py` | 探测各模型**真实输出上限**（区分静默钳制与模型主动收尾），`--panel-out` 结果可直接进面板展示（见下节） |
 
 二进制不在 git 中：脚本首次使用自动 `go build` 对应 `cmd/*`（Docker 镜像内已预编译）。
+
+### 一键更新 update.sh
+
+拉取最新代码 → 重建镜像 → 滚动重启 → 健康检查，失败自动回滚到更新前的镜像。
+
+```bash
+./update.sh              # 交互确认后更新
+./update.sh -y           # 跳过确认（适合无人值守）
+./update.sh status       # 只看当前容器与版本状态，不做任何改动
+./update.sh logs         # 查看上次更新的完整日志
+./update.sh rollback     # 回滚到上一个提交并重建
+```
+
+行为要点：
+
+- **远端自动识别**：用 `git remote get-url origin` 读当前仓库远端，**不硬编码仓库地址**，Fork 后可直接用
+- **加速代理回退**：直连 GitHub 拉取失败时自动尝试加速代理
+- **健康检查**：重启后探测服务是否真正可用，不通过则自动回滚并保留日志
+- 全过程写入日志文件，**SSH 会话被掐断也不影响**，事后 `./update.sh logs` 可查
+
+可用环境变量覆盖默认值：
+
+```bash
+REPO_DIR=/your/path ./update.sh    # 部署目录，默认 /opt/workbuddy2api
+SERVICE=wb2api     ./update.sh    # compose 服务名，默认 wb2api
+BRANCH=main        ./update.sh    # 跟踪分支，默认 main
+REQUIRED_UID=10001 ./update.sh    # config.json 需要的属主，默认 10001
+```
 
 ### 探测模型真实输出上限
 

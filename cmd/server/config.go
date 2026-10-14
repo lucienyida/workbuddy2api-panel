@@ -170,7 +170,7 @@ type Config struct {
 	WebAuth struct {
 		Enabled bool `json:"enabled"`
 		// UsersFile 用户库落盘路径（用户名 → PBKDF2 哈希）。
-		// 默认 ./data/webusers.json；独立于 config.json 存放——密码哈希不该出现在
+		// 默认 ./data/web_users.json；独立于 config.json 存放——密码哈希不该出现在
 		// 会被人随手贴出来的配置文件里。
 		UsersFile string `json:"users_file"`
 		// SessionTTL 会话有效期，Go duration 字符串（"12h"）。空 = 12h。
