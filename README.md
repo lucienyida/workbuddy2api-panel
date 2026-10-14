@@ -263,7 +263,7 @@ mkdir -p auths data && cp config.example.json config.json
 docker run -d --name workbuddy2api \
   -p 7863:7863 -e TZ=Asia/Shanghai \
   -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
-  ghcr.io/linguo2625469/workbuddy2api-panel:latest
+  ghcr.io/lucienyida/workbuddy2api-panel:latest
 
 # 3. 健康检查（无可用账号时返回 503）
 curl -s http://localhost:7863/healthz
@@ -274,12 +274,19 @@ curl -s http://localhost:7863/healthz
 >
 > 镜像 tag 规则：`main` 分支推送 `latest` / `main` / `sha-xxxxxx`；打 `v*` tag 额外发布
 > `1.2.3` / `1.2` / `1` 语义化版本；PR 仅构建验证、不推送。
+>
+> ⚠️ **镜像由 GitHub Actions 自动构建，仓库默认不预置**。首次使用 `docker run` 拉取前，
+> 需先让 `.github/workflows/docker-ghcr.yml` 在 `main` 上跑过一次（推送即触发，或到
+> Actions 页手动 `workflow_dispatch`）。若镜像尚未构建，`docker run` 会报
+> `manifest unknown`——此时改用下面的 [方式一 Docker Compose](#方式一docker-compose推荐服务器部署)
+> 本地构建，或先跑一次 Actions。
+> 另需确认仓库 Settings → Actions → General 中 Actions 未被禁用。
 
 ### 方式一：Docker Compose（推荐服务器部署）
 
 ```bash
 # 1. 克隆
-git clone https://github.com/linguo2625469/workbuddy2api-panel.git
+git clone https://github.com/lucienyida/workbuddy2api-panel.git
 cd workbuddy2api-panel
 
 # 2. 准备配置（compose 挂载此文件，缺失会导致容器启动失败）
@@ -981,7 +988,7 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 
 ### 3. 发布来源与合规边界
 
-- **无预编译 release**：仓库无 Release / tag，产物 = 源码自构建（Dockerfile 多阶段在本地构建时完成）
+- **无预编译 release**：仓库无 Release / tag，产物 = 源码自构建（Dockerfile 多阶段在本地构建时完成）；GHCR 镜像若已由 Actions 构建，属同一份源码的派生产物，可由 Actions 页追溯
 - 登录 / 签到 / 积分工具：`./login.sh` / `./signin.sh` / `./credit.sh`
 - **无产物校验和**：`go.sum` 仅约束 Go 模块依赖；Docker 镜像由本地 `docker compose build` 生成，未引用第三方镜像
 - 上游 CodeBuddy 属腾讯系商业产品，本项目是其**非官方 OpenAI 兼容网关**；使用其账号做 API 网关涉及目标平台服务条款与账号风险，作者不对账号封禁、条款违约或使用结果负责

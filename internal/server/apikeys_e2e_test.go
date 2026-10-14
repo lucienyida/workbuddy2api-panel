@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/lucienyida/workbuddy2api-panel/internal/livecfg"
+	"github.com/lucienyida/workbuddy2api-panel/internal/pool"
 )
 
 // liveWithKeys 构造一个只含鉴权字段的 Live holder（其余走零值默认）。

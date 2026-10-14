@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/webauth"
+	"github.com/lucienyida/workbuddy2api-panel/internal/webauth"
 )
 
 // runSetPassword 处理 setpassword 子命令；返回进程退出码。

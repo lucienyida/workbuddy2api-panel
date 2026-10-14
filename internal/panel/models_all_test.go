@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/lucienyida/workbuddy2api-panel/internal/auth"
+	"github.com/lucienyida/workbuddy2api-panel/internal/pool"
+	"github.com/lucienyida/workbuddy2api-panel/internal/upstream"
 )
 
 // httptestGet 发起带 api_key 鉴权的 GET（面板未启用账密时走 Bearer）。

@@ -3,7 +3,7 @@ package server
 import (
 	"strings"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
+	"github.com/lucienyida/workbuddy2api-panel/internal/livecfg"
 )
 
 // APIKeyEntry 是 livecfg.APIKeyEntry 的包内别名，便于 server 包各处直接书写。

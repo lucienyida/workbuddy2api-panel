@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
+	"github.com/lucienyida/workbuddy2api-panel/internal/pool"
+	"github.com/lucienyida/workbuddy2api-panel/internal/server"
 )
 
 // realmAwareAvailableForModel 构造会话粘性路由按模型可用口径的 realm 感知闭包。
