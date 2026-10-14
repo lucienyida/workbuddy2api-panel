@@ -1044,7 +1044,43 @@ function put(obj, path, val) {
   o[path[path.length - 1]] = val;
 }
 
-async function loadConfig() {
+/* 自动填充防御（小米/Chrome 等浏览器）─────────────────────────────────────
+   浏览器会把保存的账号密码填进配置表单里的 api_key / user_agent 等框，
+   collectConfig 拿到非空值就照发，保存时把真实配置覆盖掉。
+   autocomplete="off" 只对「非登录表单」有效，且各浏览器策略不同，不能只靠它。
+   这里做运行时兜底：记录服务端下发的原值，用户没手动改过就一律不采信。 */
+const trustedCfg = Object.create(null);   // name → 服务端下发的原值
+function snapshotCfg() {
+  const f = $('cfgForm');
+  if (!f) return;
+  for (const [name] of Object.entries(CFG_MAP)) {
+    const el = f.elements[name];
+    if (el) trustedCfg[name] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+}
+/* 被浏览器偷偷填过（当前值 ≠ 服务端下发的值，且用户从未手动编辑）→ 视为污染 */
+const defusedCfg = new Set();             // 已确认被自动填充污染的字段
+function markPollutedCfg() {
+  const f = $('cfgForm');
+  if (!f) return;
+  for (const [name] of Object.entries(CFG_MAP)) {
+    const el = f.elements[name];
+    if (!el || el.type === 'checkbox') continue;
+    // 用户手动编辑过的字段永远信任，并把它作为新的基线（否则会被反复打回原值）。
+    // dataset 在真实 DOM 上一定存在；测试用的极简 stub 可能没有，故容错。
+    const edited = el.dataset && el.dataset.userEdited;
+    if (edited) { trustedCfg[name] = el.value; defusedCfg.delete(name); continue; }
+    if (name in trustedCfg && el.value !== trustedCfg[name]) {
+      // 没人碰过却被改了 —— 只可能是浏览器自动填充
+      defusedCfg.add(name);
+      el.value = trustedCfg[name];
+    }
+  }
+}
+function loadConfig() {
+  return _loadConfig().then(() => snapshotCfg());
+}
+async function _loadConfig() {
   try {
     const d = await api('config');
     cfgLoaded = d.config;
@@ -1065,6 +1101,7 @@ async function loadConfig() {
 }
 function collectConfig() {
   const f = $('cfgForm'), out = {};
+  markPollutedCfg();   // 先清掉浏览器自动填充塞进来的值
   for (const [name, path] of Object.entries(CFG_MAP)) {
     const el = f.elements[name];
     if (!el) continue;
@@ -1075,6 +1112,8 @@ function collectConfig() {
       const raw = el.value.trim();
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
       if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
+      // 曾被浏览器自动填充污染、且用户没有重新输入过的字段：不下发，避免覆盖真实值。
+      else if (defusedCfg.has(name)) v = undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
     }
@@ -1110,6 +1149,11 @@ function markDurationFields() {
   }
 }
 $('cfgForm').addEventListener('input', ev => {
+  // 真实用户输入：标记该字段已被手动编辑，自动填充防御不再丢弃它的值。
+  if (ev.target && ev.target.name) {
+    if (ev.target.dataset) ev.target.dataset.userEdited = '1';
+    defusedCfg.delete(ev.target.name);
+  }
   if (DURATION_FIELDS.includes(ev.target.name)) markDurationFields();
 });
 $('btnEye').onclick = () => {

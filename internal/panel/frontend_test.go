@@ -573,8 +573,18 @@ func TestConfigFormMatchesCFGMap(t *testing.T) {
 	}
 
 	// 1) 表单里的每个 name 都要有 CFG_MAP 条目（否则收集/回填都拿不到它）。
-	form := html[strings.Index(html, `<form id="cfgForm">`):]
-	form = form[:strings.Index(form, "</form>")]
+	// 注意：<form id="cfgForm"> 之后可能还有别的属性（如 autocomplete="off"），
+	// 所以只匹配到标签名，不能用完整字面量（否则改动属性会让这里 panic）。
+	formStart := strings.Index(html, `<form id="cfgForm"`)
+	if formStart < 0 {
+		t.Fatal("index.html 里找不到 <form id=\"cfgForm\">")
+	}
+	form := html[formStart:]
+	formEnd := strings.Index(form, "</form>")
+	if formEnd < 0 {
+		t.Fatal("<form id=\"cfgForm\"> 没有对应的 </form>")
+	}
+	form = form[:formEnd]
 	names := map[string]bool{}
 	for _, m := range regexp.MustCompile(`name="([a-z_0-9]+)"`).FindAllStringSubmatch(form, -1) {
 		names[m[1]] = true

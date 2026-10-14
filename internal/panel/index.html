@@ -935,7 +935,7 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
 
     <!-- 配置 -->
     <section class="view" id="view-config" hidden>
-      <form id="cfgForm">
+      <form id="cfgForm" autocomplete="off">
         <div class="box">
           <header><h3>服务</h3><span class="grow"></span><span class="note" id="cfgPath"></span></header>
           <div class="pad">
@@ -944,7 +944,7 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
                 <input name="listen" placeholder=":7863">
                 <span class="hint">改动需重启进程</span></label>
               <label class="fld"><span class="lb">API 密钥</span>
-                <div class="inline"><input name="api_key" id="cfgKey" type="password" placeholder="留空 = 不鉴权">
+                <div class="inline"><input name="api_key" id="cfgKey" type="password" placeholder="留空 = 不鉴权" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other">
                 <button type="button" class="xs" id="btnEye">显示</button></div>
                 <span class="hint">立即生效（含面板自身）</span></label>
             </div>
@@ -1084,7 +1084,7 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
             <div class="hr"></div>
             <div class="grid2">
               <label class="fld"><span class="lb">出站 User-Agent</span>
-                <input name="user_agent" placeholder="留空 = CLI/2.63.2 CodeBuddy/2.63.2">
+                <input name="user_agent" placeholder="留空 = CLI/2.63.2 CodeBuddy/2.63.2" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other">
                 <span class="hint">影响官网积分记录「使用端」显示；需重启</span></label>
             </div>
             <div class="hr"></div>
