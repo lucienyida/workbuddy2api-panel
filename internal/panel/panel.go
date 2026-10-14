@@ -351,16 +351,27 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
 	var fetchErrs []string
 
+	// realm 参数可选：默认 cn（面板主视图是国内站）；?realm=global 只查国际版目录。
+	// 白名单编辑器按 tab 分域渲染，必须拿到**单域**列表——此前无脑合并两域，
+	// 导致勾选「国内版」和「国际版」看到的是同一份混合列表（分不开）。
+	// 与 qiaoba 的 models 端点契约一致（qiaoba 也是默认 cn、realm=global 查国际）。
+	realm := r.URL.Query().Get("realm")
+	if realm != "global" {
+		realm = "cn"
+	}
+
 	// CN 域：有可用 CN 账号才查（此前无条件 Pool.Pick()+FetchModels——选中 global
 	// 账号时打 CN 端点必然失败，混合池表现为偶发 502，纯 global 池必炸）。
-	if uids := p.cfg.Pool.AvailableUIDsForRealm("cn"); len(uids) > 0 {
-		if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
-			infos, err := p.cfg.Upstream.FetchModels(acct)
-			if err != nil {
-				fetchErrs = append(fetchErrs, "cn: "+err.Error())
-			} else {
-				for _, mi := range infos {
-					out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
+	if realm == "cn" {
+		if uids := p.cfg.Pool.AvailableUIDsForRealm("cn"); len(uids) > 0 {
+			if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
+				infos, err := p.cfg.Upstream.FetchModels(acct)
+				if err != nil {
+					fetchErrs = append(fetchErrs, "cn: "+err.Error())
+				} else {
+					for _, mi := range infos {
+						out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
+					}
 				}
 			}
 		}
@@ -368,16 +379,18 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 
 	// global 域：路由开关开且有可用 global 账号才查（独立目录端点，FetchGlobalModelInfos；
 	// Upstream.GlobalEnabled 是探测侧同一道闸，与 main 装配的 config global.enabled 一致）。
-	if p.cfg.Upstream.GlobalEnabled {
-		if uids := p.cfg.Pool.AvailableUIDsForRealm("global"); len(uids) > 0 {
-			if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
-				infos := p.cfg.Upstream.FetchGlobalModelInfos(acct)
-				if len(infos) == 0 {
-					fetchErrs = append(fetchErrs, "global: 上游未返回可用模型")
-				} else {
-					efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
-					for _, mi := range infos {
-						out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
+	if realm == "global" {
+		if p.cfg.Upstream.GlobalEnabled {
+			if uids := p.cfg.Pool.AvailableUIDsForRealm("global"); len(uids) > 0 {
+				if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
+					infos := p.cfg.Upstream.FetchGlobalModelInfos(acct)
+					if len(infos) == 0 {
+						fetchErrs = append(fetchErrs, "global: 上游未返回可用模型")
+					} else {
+						efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
+						for _, mi := range infos {
+							out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
+						}
 					}
 				}
 			}
@@ -389,7 +402,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "fetch models: "+strings.Join(fetchErrs, "; "))
 			return
 		}
-		writeErr(w, http.StatusServiceUnavailable, "没有可用账号：请先在面板添加账号再查询")
+		writeErr(w, http.StatusServiceUnavailable, "没有可用的 "+realm+" 账号：请先在面板添加账号再查询")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
