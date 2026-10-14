@@ -159,6 +159,31 @@ type Config struct {
 		SanitizeBlacklistFingerprints bool `json:"sanitize_blacklist_fingerprints"`
 	} `json:"features"`
 
+	// WebAuth 面板账密登录（独立于 api_key 的“人用”凭证）。
+	//
+	// 与 api_key 的关系：api_key 是给 OpenAI 兼容客户端用的机器凭证（客户端只会发
+	// Bearer 头，不会填登录表单），服务于 /v1/*；本段是给浏览器里的人用的，
+	// 启用后面板 /panel/* 只认登录会话（api_key 对面板无效）。
+	//
+	// 缺省 enabled=false：完全不生效（老配置零回归，面板仍走 api_key 弹窗）。
+	// 来源: qiaoba223/workbuddy2api-panel（上游原生功能，linguo fork 时未带入）。
+	WebAuth struct {
+		Enabled bool `json:"enabled"`
+		// UsersFile 用户库落盘路径（用户名 → PBKDF2 哈希）。
+		// 默认 ./data/webusers.json；独立于 config.json 存放——密码哈希不该出现在
+		// 会被人随手贴出来的配置文件里。
+		UsersFile string `json:"users_file"`
+		// SessionTTL 会话有效期，Go duration 字符串（"12h"）。空 = 12h。
+		SessionTTL string `json:"session_ttl"`
+		// CookieSecure 会话 Cookie 是否带 Secure 标志。HTTPS 部署应设 true；
+		// 纯 HTTP 部署必须 false（否则浏览器不回传 Cookie，登录后立刻又跳登录页）。
+		CookieSecure bool `json:"cookie_secure"`
+		// MaxLoginAttempts / LoginWindow 单 IP 登录失败限速（防在线爆破）。
+		// 缺省 10 次 / 5m；成功登录清零。
+		MaxLoginAttempts int    `json:"max_login_attempts"`
+		LoginWindow      string `json:"login_window"`
+	} `json:"web_auth"`
+
 	Prompt struct {
 		// Mode passthrough（默认）= 透传客户端原始 system（降级重试仍会切到 Degraded）；
 		// custom = 网关用自有系统提示词替换客户端 system/developer；

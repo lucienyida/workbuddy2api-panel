@@ -23,6 +23,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/webauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
@@ -65,6 +66,11 @@ type Config struct {
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
 	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
 	ProbeFile string
+
+	// WebAuth 面板账密登录（web_auth 段）。nil 或未启用时，面板走原有 api_key 鉴权。
+	// 来源: qiaoba223/workbuddy2api-panel（上游原生功能，linguo fork 时未带入）。
+	// 由 main 注入（见 cmd/server/main.go），不启用时保持 nil —— 零回归。
+	WebAuth *webauth.Auth
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
@@ -147,45 +153,63 @@ func New(cfg Config) *Panel {
 func (p *Panel) Logs() *Ring { return p.logs }
 
 func (p *Panel) routes() {
+	// 账密登录（公开端点只有 status/login/setup 三个；其余需登录态，见 web_login.go）。
+	// 来源: qiaoba223/workbuddy2api-panel。公开端点用 withAuthPublic（显式不鉴权），
+	// 其余用 withAuthOrWeb（web_auth 未启用时透传 linguo 原 api_key 鉴权）。
+	p.mux.HandleFunc("GET /panel/api/auth/status", p.withAuthPublic(p.authStatus))
+	// 首次初始化：用户库为空时创建首个管理员。公开端点（此刻还没有会话，
+	// 拿不到 CSRF token），靠“仅空库可用”这一瞬态约束保证安全。见 web_login.go。
+	p.mux.HandleFunc("POST /panel/api/auth/setup", p.withAuthPublic(p.authSetup))
+	p.mux.HandleFunc("POST /panel/api/auth/login", p.withAuthPublic(p.authLogin))
+	p.mux.HandleFunc("POST /panel/api/auth/logout", p.withAuthOrWeb(p.authLogout))
+	p.mux.HandleFunc("POST /panel/api/auth/password", p.withAuthOrWeb(p.authChangePassword))
+	// 改账号（用户名 + 密码一次事务完成）。旧前端分两步调 password+rename 会因
+	// 中途会话失效而失败，此端点为其替代。见 web_login.go 的说明。
+	p.mux.HandleFunc("POST /panel/api/auth/account", p.withAuthOrWeb(p.authChangeAccount))
+	p.mux.HandleFunc("GET /panel/api/auth/users", p.withAuthOrWeb(p.authListUsers))
+	p.mux.HandleFunc("POST /panel/api/auth/users", p.withAuthOrWeb(p.authUpsertUser))
+	p.mux.HandleFunc("DELETE /panel/api/auth/users/{name}", p.withAuthOrWeb(p.authDeleteUser))
+	p.mux.HandleFunc("POST /panel/api/auth/users/{name}/rename", p.withAuthOrWeb(p.authRenameUser))
+
 	p.mux.HandleFunc("GET /panel/{$}", p.index)
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
-	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
-	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
-	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))
-	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))
-	p.mux.HandleFunc("GET /panel/api/models", p.withAuth(p.models))
-	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
-	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))
-	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
-	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importCockpit))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountResume))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountRemove))
-	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks", p.withAuth(p.accountTasks))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuth(p.accountTaskAccept))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept_all", p.withAuth(p.taskAcceptAll))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim", p.withAuth(p.accountTaskClaim))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto", p.withAuth(p.accountTaskAuto))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto_all", p.withAuth(p.accountTaskAutoAll))
-	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuth(p.tasksScanAll))
-	p.mux.HandleFunc("POST /panel/api/tasks/run_queue", p.withAuth(p.tasksRunQueue))
-	p.mux.HandleFunc("GET /panel/api/tasks/queue", p.withAuth(p.tasksQueueStatus))
-	p.mux.HandleFunc("GET /panel/api/school/vouchers", p.withAuth(p.schoolVouchers))
-	p.mux.HandleFunc("POST /panel/api/checkin_all", p.withAuth(p.checkinAll))
-	p.mux.HandleFunc("POST /panel/api/travel_all", p.withAuth(p.travelAll))
-	p.mux.HandleFunc("POST /panel/api/activity_all", p.withAuth(p.activityAll))
-	p.mux.HandleFunc("POST /panel/api/keepalive_all", p.withAuth(p.keepaliveAll))
-	p.mux.HandleFunc("POST /panel/api/balance_all", p.withAuth(p.balanceAll))
-	p.mux.HandleFunc("GET /panel/api/packages", p.withAuth(p.packages))
-	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
-	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
-	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
-	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
-	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	p.mux.HandleFunc("GET /panel/api/overview", p.withAuthOrWeb(p.overview))
+	p.mux.HandleFunc("GET /panel/api/logs", p.withAuthOrWeb(p.logsHandler))
+	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuthOrWeb(p.requestMetrics))
+	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuthOrWeb(p.requestLogs))
+	p.mux.HandleFunc("GET /panel/api/models", p.withAuthOrWeb(p.models))
+	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuthOrWeb(p.loginStart))
+	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuthOrWeb(p.loginPoll))
+	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuthOrWeb(p.loginRegions))
+	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuthOrWeb(p.importCockpit))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuthOrWeb(p.accountRevive))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuthOrWeb(p.accountDisable))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuthOrWeb(p.accountPause))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuthOrWeb(p.accountResume))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuthOrWeb(p.accountCheckin))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuthOrWeb(p.accountBalance))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuthOrWeb(p.accountRemove))
+	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks", p.withAuthOrWeb(p.accountTasks))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuthOrWeb(p.accountTaskAccept))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept_all", p.withAuthOrWeb(p.taskAcceptAll))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim", p.withAuthOrWeb(p.accountTaskClaim))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto", p.withAuthOrWeb(p.accountTaskAuto))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto_all", p.withAuthOrWeb(p.accountTaskAutoAll))
+	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuthOrWeb(p.tasksScanAll))
+	p.mux.HandleFunc("POST /panel/api/tasks/run_queue", p.withAuthOrWeb(p.tasksRunQueue))
+	p.mux.HandleFunc("GET /panel/api/tasks/queue", p.withAuthOrWeb(p.tasksQueueStatus))
+	p.mux.HandleFunc("GET /panel/api/school/vouchers", p.withAuthOrWeb(p.schoolVouchers))
+	p.mux.HandleFunc("POST /panel/api/checkin_all", p.withAuthOrWeb(p.checkinAll))
+	p.mux.HandleFunc("POST /panel/api/travel_all", p.withAuthOrWeb(p.travelAll))
+	p.mux.HandleFunc("POST /panel/api/activity_all", p.withAuthOrWeb(p.activityAll))
+	p.mux.HandleFunc("POST /panel/api/keepalive_all", p.withAuthOrWeb(p.keepaliveAll))
+	p.mux.HandleFunc("POST /panel/api/balance_all", p.withAuthOrWeb(p.balanceAll))
+	p.mux.HandleFunc("GET /panel/api/packages", p.withAuthOrWeb(p.packages))
+	p.mux.HandleFunc("GET /panel/api/usage", p.withAuthOrWeb(p.usage))
+	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuthOrWeb(p.usageSave))
+	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuthOrWeb(p.modelProbes))
+	p.mux.HandleFunc("GET /panel/api/config", p.withAuthOrWeb(p.getConfig))
+	p.mux.HandleFunc("POST /panel/api/config", p.withAuthOrWeb(p.saveConfig))
 }
 
 // ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API
