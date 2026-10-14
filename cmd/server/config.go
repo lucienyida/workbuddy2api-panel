@@ -12,15 +12,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 )
 
 // Config 顶层配置。
 type Config struct {
-	Listen    string `json:"listen"`     // ":7863"
-	APIKey    string `json:"api_key"`    // 空 = 不鉴权
-	AuthDir   string `json:"auth_dir"`   // ./auths
-	StateFile string `json:"state_file"` // ./data/state.json
+	Listen string `json:"listen"` // ":7863"
+	// APIKey 主密钥：空 = 不鉴权。不受白名单限制，可访问全部模型（零回归）。
+	APIKey string `json:"api_key"`
+	// Keys 受限密钥列表：每个条目可配白名单，只能访问 Allow 列出的模型。
+	// 主密钥与受限密钥并存；主密钥始终全量放行（见 server.allowedModel）。
+	Keys      []livecfg.APIKeyEntry `json:"keys,omitempty"`
+	AuthDir   string                `json:"auth_dir"`   // ./auths
+	StateFile string                `json:"state_file"` // ./data/state.json
 
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
@@ -453,6 +458,32 @@ func applyEnv(c *Config) {
 
 func (c *Config) normalize() error {
 	var err error
+	// keys[] 归一：去空白、丢弃 Key 为空的条目、拒绝与主密钥或其他条目重复。
+	// 重复 key 是危险配置（用户以为两个白名单独立，实际后配置的永远匹配不到），
+	// 故 fail fast 而不是静默去重。
+	{
+		seen := map[string]int{}
+		if c.APIKey != "" {
+			seen[c.APIKey] = -1 // 主密钥占位，-1 表示"主密钥"
+		}
+		out := c.Keys[:0]
+		for i, k := range c.Keys {
+			k.Key = strings.TrimSpace(k.Key)
+			k.Name = strings.TrimSpace(k.Name)
+			if k.Key == "" {
+				continue // 允许面板先建占位条目
+			}
+			if prev, dup := seen[k.Key]; dup {
+				if prev == -1 {
+					return fmt.Errorf("keys[%d]: 与主密钥 api_key 重复", i)
+				}
+				return fmt.Errorf("keys[%d]: 与 keys[%d] 重复", i, prev)
+			}
+			seen[k.Key] = i
+			out = append(out, k)
+		}
+		c.Keys = out
+	}
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
 	}
