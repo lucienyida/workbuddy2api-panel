@@ -1234,7 +1234,29 @@ async function checkAuthGate() {
   try { await api('overview'); }
   catch (e) { if (String(e.message).includes('密钥') || String(e.message).includes('api_key')) return; }
 }
-start();
+/* enterPanel 进入面板：绑定导航点击 + 首次路由渲染 + 启动轮询。
+   **必须由两条路径共用**：启动时 gate() 通过（已登录/回访），以及登录框提交成功后。
+   早期只在启动块里绑定导航，导致"在登录页直接登录"这条路径下导航点击全部失效
+   （go() 从未被调用、onclick 从未挂上），点用量/积分毫无反应。 */
+function enterPanel() {
+  // 幂等：重复调用不重复绑定（onclick 赋值本身幂等，这里只是避免重复设置初始路由）。
+  document.querySelectorAll('.nav a').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    go(a.dataset.view);
+    history.replaceState(null, '', '#' + a.dataset.view);
+  });
+  const initial = (location.hash || '#accounts').slice(1);
+  go(initial in TITLES ? initial : 'accounts');
+  start();
+}
+
+/* 启动顺序：**先**过登录门（决定用 Cookie 还是 key），**再**渲染路由。
+   顺序至关重要：go() 会立即触发 api() 请求，而 api() 的 401 分支要靠 authMode
+   决定弹「登录框」还是「密钥框」。若 go() 先跑，authMode 还是 'none'，
+   会话失效时就会错误地弹出 api_key 对话框（改名后重载即触发此 bug）。 */
+(async () => {
+  if (await gate()) enterPanel();
+})();
 
 /* ── 积分任务 ─────────────────────────────────────────────────────── */
 let taskUID = null;
@@ -3238,3 +3260,233 @@ const KEDIT = (() => {
 
   return { load, collect, render };
 })();
+
+
+/* ── 登录门（移植自 qiaoba223/workbuddy2api-panel，verbatim + 空值保护）─────
+   linguo 版骨架没有 meName/btnLogout/btnPwd 节点，这里用 $safe() 兜住，
+   其余逻辑与原版逐字节相同。 */
+function $safe(id) { return $(id) || document.createElement('div'); }
+
+/* ── 登录门 ───────────────────────────────────────────────────────── */
+/* 两条鉴权通道（与后端 withAuth 对应）：
+   - 账密登录启用时：走 /panel/api/auth/login 换会话 Cookie（HttpOnly，JS 读不到），
+     此后所有 api() 请求靠浏览器自动带 Cookie，前端不接触任何密钥；
+   - 未启用时：退回 api_key 输入框（老行为）。
+   启动时先问 /panel/api/auth/status 决定弹哪个门。 */
+let authMode = 'none';   // 'session' | 'key' | 'none'
+
+function openKey() { $('keyVeil').classList.add('on'); setTimeout(() => $('keyInput').focus(), 60); }
+$('btnKey').onclick = async () => {
+  const v = $('keyInput').value.trim();
+  if (!v) return;
+  localStorage.setItem(LS_KEY, v);
+  try {
+    await api('overview');
+    $('keyErr').hidden = true;
+    $('keyVeil').classList.remove('on');
+    start();
+  } catch (e) { $('keyErr').hidden = false; }
+};
+$('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
+
+/* 登录框 */
+// setupMode：登录框处于「首次初始化」态（用户库为空）。此时按钮变成「创建账号」，
+// 多出一个确认密码框，提交打到 auth/setup 而不是 auth/login。
+let setupMode = false;
+
+function openLogin() {
+  $('loginVeil').classList.add('on');
+  setTimeout(() => $('loginUser').focus(), 60);
+}
+
+// enterSetupMode 把登录框切换成首次初始化表单。
+function enterSetupMode() {
+  setupMode = true;
+  $('loginTitle').textContent = '初始化面板';
+  $('loginHint').textContent = '首次使用，请创建管理员账号。创建后此入口自动关闭。';
+  $('loginUser').value = 'admin';           // 默认名，可改
+  $('loginPass').placeholder = '设置密码（至少 8 位）';
+  $('loginPass2').hidden = false;
+  $('btnLogin').textContent = '创建账号';
+}
+
+$('btnLogin').onclick = doLogin;
+$('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') setupMode ? $('loginPass2').focus() : doLogin(); });
+$('loginPass2').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('loginUser').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginPass').focus(); });
+
+/* 伪密码框降级：不支持 -webkit-text-security 的浏览器（少见）会显示明文。
+   此时退回到"真密码框 + 关闭自动填充"，至少视觉安全。
+   检测方式：设置该属性后读取是否生效。 */
+(function secretFallback() {
+  const probe = document.createElement('input');
+  probe.style.webkitTextSecurity = 'disc';
+  // Chrome/Safari/微信 WebView 支持；Firefox 长期不支持。
+  if (probe.style.webkitTextSecurity !== 'disc') {
+    document.querySelectorAll('.secret').forEach(el => { el.type = 'password'; });
+  }
+})();
+
+async function doLogin() {
+  const u = $('loginUser').value.trim(), p = $('loginPass').value;
+  if (!u || !p) return;
+  const btn = $('btnLogin');
+
+  // ── 首次初始化：校验两次密码一致后调 auth/setup ────────────────────
+  if (setupMode) {
+    const p2 = $('loginPass2').value;
+    const fail = m => { $('loginErr').textContent = m; $('loginErr').hidden = false; };
+    if (p.length < 8) return fail('密码至少 8 位');
+    if (p !== p2) return fail('两次输入的密码不一致');
+
+    btn.disabled = true; btn.textContent = '创建中…';
+    try {
+      const r = await fetch('/panel/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      // 建完不自动登录（后端也不签会话）：切回普通登录态，让用户显式登一次。
+      // 这样"初始化"和"进入面板"是两个明确动作，不会让匿名访问误以为已进后台。
+      setupMode = false;
+      $('loginTitle').textContent = '登录';
+      $('loginHint').textContent = '账号已创建，请用刚才的凭据登录。';
+      $('loginPass').placeholder = '密码';
+      $('loginPass2').hidden = true;
+      $('loginPass2').value = '';
+      $('loginPass').value = '';
+      $('loginErr').hidden = true;
+      $('btnLogin').textContent = '登录';
+      toast('管理员账号已创建，请登录', 'ok');
+      setTimeout(() => $('loginPass').focus(), 60);
+    } catch (e) {
+      fail(e.message || '创建失败');
+    } finally { btn.disabled = false; if (setupMode) btn.textContent = '创建账号'; }
+    return;
+  }
+
+  // ── 常规登录 ────────────────────────────────────────────────────────
+  btn.disabled = true; btn.textContent = '登录中…';
+  try {
+    const r = await fetch('/panel/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    $('loginPass').value = '';
+    $('loginErr').hidden = true;
+    $('loginVeil').classList.remove('on');
+    // 登录成功才显示面板骨架（未登录时始终保持 hidden）。
+    $('appShell').hidden = false;
+    $safe('btnLogout').hidden = false;
+    $safe('btnPwd').hidden = false;
+    meUser = d.username || u;
+    $safe('meName').textContent = meUser;
+    toast('已登录：' + (d.username || u), 'ok');
+    // 走与启动路径相同的入口：绑定导航 + 首次路由渲染 + 启动轮询。
+    // （早期这里只调 start()，导致登录后导航点击无效——见 enterPanel 注释。）
+    enterPanel();
+  } catch (e) {
+    $('loginErr').textContent = e.message || '登录失败';
+    $('loginErr').hidden = false;
+  } finally { btn.disabled = false; btn.textContent = '登录'; }
+}
+
+async function doLogout() {
+  try {
+    // 走 api() 以便自动带上 CSRF 令牌（logout 是改状态 POST，受双提交校验保护）。
+    await api('auth/logout', { method: 'POST' });
+  } catch (e) { /* 忽略：无论成功与否都回登录页 */ }
+  location.reload();
+}
+
+/* 账号设置（改用户名 / 改密码） */
+function openPwd() {
+  $('pwdUser').value = meUser;
+  $('pwdOld').value = ''; $('pwdNew').value = ''; $('pwdNew2').value = '';
+  $('pwdErr').hidden = true;
+  $('pwdVeil').classList.add('on');
+  setTimeout(() => $('pwdOld').focus(), 60);
+}
+function closePwd() { $('pwdVeil').classList.remove('on'); }
+$('btnPwdCancel').onclick = closePwd;
+$safe('btnPwd').onclick = openPwd;
+$('pwdNew2').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnPwdSave').click(); });
+
+async function doSaveAccount() {
+  const newUser = $('pwdUser').value.trim();
+  const oldP = $('pwdOld').value;
+  const n1 = $('pwdNew').value, n2 = $('pwdNew2').value;
+  const err = $('pwdErr');
+  const fail = m => { err.textContent = m; err.hidden = false; };
+
+  const wantRename = newUser && newUser !== meUser;
+  const wantPwd = !!n1;
+
+  if (!newUser) return fail('用户名不能为空');
+  if (!oldP) return fail('请输入当前密码');
+  if (!wantRename && !wantPwd) return fail('没有需要修改的内容');
+  if (wantPwd) {
+    if (n1.length < 8) return fail('新密码至少 8 位');
+    if (n1 !== n2) return fail('两次输入的新密码不一致');
+    if (n1 === oldP) return fail('新密码不能与当前密码相同');
+  }
+
+  const btn = $('btnPwdSave');
+  btn.disabled = true; btn.textContent = '保存中…';
+  try {
+    // 一个请求同时改用户名和密码。**不要**拆成两次调用：
+    // 改密会撤销全部会话（含当前会话），第二个请求必然 401，
+    // 结果是"密码改了、用户名没改，还被登出"。
+    await api('auth/account', {
+      method: 'POST',
+      body: JSON.stringify({
+        old_password: oldP,
+        new_name: newUser,
+        new_password: n1,   // 空字符串 = 不改密码
+      }),
+    });
+    closePwd();
+    toast('已保存，请用新凭据重新登录', 'ok');
+    // 改密/改名都会踢掉全部会话：等提示显示后再跳登录页。
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    fail(e.message || '保存失败');
+  } finally { btn.disabled = false; btn.textContent = '保存'; }
+}
+$('btnPwdSave').onclick = doSaveAccount;
+
+/* 登录门判定：账密启用且未登录 → 登录框；否则沿用 api_key 门。
+   未登录时 #appShell 保持 hidden（HTML 里默认 hidden）——登录前不渲染任何面板内容。 */
+async function gate() {
+  let st = null;
+  try {
+    const r = await fetch('/panel/api/auth/status');
+    st = await r.json();
+  } catch (e) { /* 服务异常时退回 key 门 */ }
+  if (st && st.enabled) {
+    authMode = 'session';
+    if (!st.logged_in) {
+      // 未登录：不显示面板骨架，直接弹登录框。
+      openLogin();
+      // 无用户时把登录框切换成「首次初始化」表单——部署完直接在这里建管理员，
+      // 不必再 SSH 进容器敲 setpassword。提交成功后此入口永久关闭（后端保证）。
+      if (st.has_users === false) enterSetupMode();
+      return false;
+    }
+    $('appShell').hidden = false;
+    $safe('btnLogout').hidden = false;
+    $safe('btnPwd').hidden = false;
+    meUser = st.username || '';
+    $safe('meName').textContent = meUser;
+    return true;
+  }
+  // 未启用账密（旧模式）：沿用 api_key 门。面板骨架先显示，401 时弹密钥框。
+  authMode = 'key';
+  $('appShell').hidden = false;
+  return true;
+}
