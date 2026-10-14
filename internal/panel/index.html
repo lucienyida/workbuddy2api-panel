@@ -627,7 +627,7 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
 </style>
 </head>
 <body>
-<div class="shell">
+<div class="shell" id="appShell" hidden>
   <nav class="nav">
     <div class="brand">
       <div class="name">WorkBuddy2API</div>
@@ -668,9 +668,12 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
       <span class="sep">/</span>
       <span class="meta" id="subMeta">-</span>
       <div class="grow"></div>
+      <span class="note" id="meName"></span>
       <button class="icon ghost" id="btnTheme" title="切换明暗（跟随系统 → 浅色 → 深色）" aria-label="切换主题">
         <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
       </button>
+      <button id="btnPwd" hidden title="修改当前登录账号的密码">改密</button>
+      <button id="btnLogout" hidden title="退出登录">退出</button>
       <button id="btnRefresh">刷新</button>
       <button class="primary" id="btnAdd">添加账号</button>
     </div>
@@ -1331,6 +1334,42 @@ input.secret { -webkit-text-security: disc; text-security: disc; }
       <button class="primary" id="btnLogin">登录</button>
     </footer>
   </div>
+</div>
+
+<!-- 修改密码 -->
+<div class="veil" id="pwdVeil">
+  <div class="dlg" style="width:420px">
+    <header>
+      <h3>账号设置</h3>
+      <div class="hint">改用户名或密码后，所有登录会话将失效，需要用新凭据重新登录。</div>
+    </header>
+    <div class="body">
+      <label class="fld">
+        <span class="lb">用户名</span>
+        <input type="text" id="pwdUser" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <label class="fld">
+        <span class="lb">当前密码</span>
+        <input type="password" id="pwdOld" autocomplete="off">
+        <span class="hint">仅修改用户名时也必须填写（用于确认身份）</span>
+      </label>
+      <label class="fld">
+        <span class="lb">新密码</span>
+        <input type="password" id="pwdNew" autocomplete="off" placeholder="留空 = 不修改密码">
+      </label>
+      <label class="fld">
+        <span class="lb">确认新密码</span>
+        <input type="password" id="pwdNew2" autocomplete="off" placeholder="留空 = 不修改密码">
+      </label>
+      <div class="state err" id="pwdErr" hidden></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnPwdCancel">取消</button>
+      <button class="primary" id="btnPwdSave">保存</button>
+    </footer>
+  </div>
+</div>
 
 <!-- 密钥 -->
 <div class="veil" id="keyVeil" data-lock="1">

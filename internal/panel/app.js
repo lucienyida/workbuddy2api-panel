@@ -6,6 +6,7 @@ let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
+let meUser = '';        // 当前登录用户名（账号设置对话框预填用）
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
@@ -39,13 +40,44 @@ $('btnTheme').onclick = () => {
 applyTheme();
 
 /* ── 请求 ─────────────────────────────────────────────────────────── */
+function readCookie(name) {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()[\]\\/+^]/g, '\\$&') + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 async function api(path, opts = {}) {
   const h = Object.assign({}, opts.headers || {});
-  const k = localStorage.getItem(LS_KEY);
-  if (k) h['Authorization'] = 'Bearer ' + k;
+  // 账密模式：靠 HttpOnly 会话 Cookie 鉴权（浏览器自动携带），前端不接触密钥。
+  // key 模式：仍发 Bearer（老行为，零回归）。
+  if (authMode !== 'session') {
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+  } else {
+    // CSRF 双提交令牌：改状态请求必须回填（见后端 csrf.go）。
+    // Cookie 是非 HttpOnly 的，这里读出来放进请求头，服务端比对两者是否一致。
+    const m = (opts.method || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+      const t = readCookie('wb2api_csrf');
+      if (t) h['X-CSRF-Token'] = t;
+    }
+  }
   if (opts.body) h['Content-Type'] = 'application/json';
   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
-  if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+  if (r.status === 401) {
+    // authMode 兜底：'none' 表示 gate() 还没跑完（不该发生，见文件末尾启动顺序），
+    // 此时**不能**臆断是 key 模式——否则会话失效会弹错对话框。按会话模式处理更安全
+    // （服务端 auth/status 是权威；账密模式下 401 一律回登录框）。
+    if (authMode !== 'key') {
+      $('appShell').hidden = true;
+      $safe('btnLogout').hidden = true;
+      $safe('btnPwd').hidden = true;
+      $safe('meName').textContent = '';
+      meUser = '';
+      openLogin();
+      throw new Error('登录已过期，请重新登录');
+    }
+    openKey(); throw new Error('密钥无效或未填写');
+  }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
@@ -1185,8 +1217,14 @@ $('importFile').onchange = async () => {
   const fd = new FormData();
   fd.append('file', file);
   const h = {};
-  const k = localStorage.getItem(LS_KEY);
-  if (k) h['Authorization'] = 'Bearer ' + k;
+  // 导入同样遵循鉴权模式：会话模式靠 Cookie（+ CSRF 令牌），key 模式才发 Bearer。
+  if (authMode !== 'session') {
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+  } else {
+    const t = readCookie('wb2api_csrf');
+    if (t) h['X-CSRF-Token'] = t;
+  }
   try {
     const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
     const d = await r.json();
@@ -1232,7 +1270,7 @@ function start() {
 }
 async function checkAuthGate() {
   try { await api('overview'); }
-  catch (e) { if (String(e.message).includes('密钥') || String(e.message).includes('api_key')) return; }
+  catch (e) { if (String(e.message).includes('密钥') || String(e.message).includes('api_key') || String(e.message).includes('登录')) return; }
 }
 /* enterPanel 进入面板：绑定导航点击 + 首次路由渲染 + 启动轮询。
    **必须由两条路径共用**：启动时 gate() 通过（已登录/回访），以及登录框提交成功后。
@@ -1249,14 +1287,6 @@ function enterPanel() {
   go(initial in TITLES ? initial : 'accounts');
   start();
 }
-
-/* 启动顺序：**先**过登录门（决定用 Cookie 还是 key），**再**渲染路由。
-   顺序至关重要：go() 会立即触发 api() 请求，而 api() 的 401 分支要靠 authMode
-   决定弹「登录框」还是「密钥框」。若 go() 先跑，authMode 还是 'none'，
-   会话失效时就会错误地弹出 api_key 对话框（改名后重载即触发此 bug）。 */
-(async () => {
-  if (await gate()) enterPanel();
-})();
 
 /* ── 积分任务 ─────────────────────────────────────────────────────── */
 let taskUID = null;
@@ -3490,3 +3520,14 @@ async function gate() {
   $('appShell').hidden = false;
   return true;
 }
+
+/* 启动顺序：**先**过登录门（决定用 Cookie 还是 key），**再**渲染路由。
+   顺序至关重要：go() 会立即触发 api() 请求，而 api() 的 401 分支要靠 authMode
+   决定弹「登录框」还是「密钥框」。若 go() 先跑，authMode 还是 'none'，
+   会话失效时就会错误地弹出 api_key 对话框（改名后重载即触发此 bug）。
+   位置也至关重要：本块必须置于文件**末尾**——gate()/authMode/enterPanel 都是
+   let/function 声明，脚本顶部执行到此处若它们尚未初始化会抛 TDZ 错误，
+   表现为「gate 静默失败、面板停留在『连接中 / v-』」。 */
+(async () => {
+  if (await gate()) enterPanel();
+})();
