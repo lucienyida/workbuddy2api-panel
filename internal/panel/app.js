@@ -664,11 +664,13 @@ async function loadModels() {
     // 本页是**全量总览**，必须两个域都拉再合并——只拉默认值会让国际版账号的模型
     // 整体消失（用户报：模型与档位里看不到国际版模型）。model id 自带 realm 前缀
     // （cn:/global:），合并后「按域筛选」下拉仍能正确区分。
-    const [cn, gl, pr] = await Promise.all([
-      api('models'),
-      api('models?realm=global').catch(() => ({ models: [] })),
-      api('model_probes').catch(() => ({})),
-    ]);
+    //
+    // 两个域都必须各自 catch：某域没有可用账号时该端点返回 503，若让异常冒泡出
+    // Promise.all，另一域就算有模型也整页空白（用户报：禁用国内账号后什么都不
+    // 显示）。可用域列表是各自的局部状态，不该互相拖死。
+    const cnReq = api('models').catch(() => ({ models: [] }));
+    const glReq = api('models?realm=global').catch(() => ({ models: [] }));
+    const [cn, gl, pr] = await Promise.all([cnReq, glReq, api('model_probes').catch(() => ({}))]);
     const d = { models: (cn.models || []).concat(gl.models || []) };
     mdAll = d.models || [];
     mdProbes = pr.probes || {};
@@ -3123,7 +3125,12 @@ const KEDIT = (() => {
         const r = await api('models?all=1');
         modelCache = { cn: r.cn || [], global: r.global || [] };
       } else {
-        const [cn, gl] = await Promise.all([api('models'), api('models?realm=global')]);
+        // 两域各自容错：某域没有可用账号时该端点 503，不能让另一域的模型跟着消失
+        //（这里与 loadModels 同因同治）。后端契约见 panel.go models()。
+        const [cn, gl] = await Promise.all([
+          api('models').catch(() => ({ models: [] })),
+          api('models?realm=global').catch(() => ({ models: [] })),
+        ]);
         modelCache = { cn: cn.models || [], global: gl.models || [] };
       }
       loadAll = !!all;
