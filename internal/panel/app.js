@@ -660,7 +660,16 @@ async function loadModels() {
   tb.innerHTML = '<tr><td colspan="7"><div class="empty">正在向上游查询…</div></td></tr>';
   try {
     // 探测数据是可选增强：拉取失败不影响模型列表本身
-    const [d, pr] = await Promise.all([api('models'), api('model_probes').catch(() => ({}))]);
+    // models 端点默认只返回 cn（27190a0 起按 realm 分域，白名单编辑器依赖该契约）。
+    // 本页是**全量总览**，必须两个域都拉再合并——只拉默认值会让国际版账号的模型
+    // 整体消失（用户报：模型与档位里看不到国际版模型）。model id 自带 realm 前缀
+    // （cn:/global:），合并后「按域筛选」下拉仍能正确区分。
+    const [cn, gl, pr] = await Promise.all([
+      api('models'),
+      api('models?realm=global').catch(() => ({ models: [] })),
+      api('model_probes').catch(() => ({})),
+    ]);
+    const d = { models: (cn.models || []).concat(gl.models || []) };
     mdAll = d.models || [];
     mdProbes = pr.probes || {};
     if (!mdAll.length) {
